@@ -43,6 +43,8 @@ if ($current -eq $branch) {
             Step "내 브랜치 최신화"
             $null = Git-Run pull --ff-only origin $branch
         }
+        Step "팀원이 $mainBranch 에 병합한 작업 확인"
+        Merge-MainIfBehind $mainBranch
     }
     Step "현재 상태"
     Git-Out status --short | ForEach-Object { Write-Host "    $_" }
@@ -111,10 +113,12 @@ if ($localExists) {
     $null = Git-Run checkout $branch
     Ok "기존 브랜치로 이동 (오늘 이미 만들어 두었네요)"
     if ($remoteExists -and -not $offline) { $null = Git-Run pull --ff-only origin $branch }
+    if (-not $offline) { Merge-MainIfBehind $mainBranch }
 }
 elseif ($remoteExists) {
     $null = Git-Run checkout -b $branch "origin/$branch"
     Ok "원격에 있던 오늘 브랜치를 받아왔습니다"
+    if (-not $offline) { Merge-MainIfBehind $mainBranch }
 }
 else {
     if (-not (Git-Run checkout -b $branch)) { Die "브랜치 생성 실패" }
