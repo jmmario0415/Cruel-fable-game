@@ -178,6 +178,41 @@ function Resolve-UnionConflict ([string]$rel) {
     $null = Git-Out add -- $rel
 }
 
+# ---------- main 에 새로 병합된 팀원 작업 가져오기 ----------
+function Merge-MainIfBehind ([string]$mainBranch) {
+    # 지금 브랜치가 origin/<main> 보다 뒤처져 있으면 알려주고 합칠지 물어본다.
+    $n = Git-Out rev-list --count "HEAD..origin/$mainBranch"
+    if ($LASTEXITCODE -ne 0 -or $n -notmatch '^\d+$' -or [int]$n -eq 0) {
+        Ok "팀원 작업까지 최신 상태입니다"
+        return
+    }
+
+    Warn "$mainBranch 에 내 브랜치가 아직 못 받은 커밋이 $n 개 있습니다 (팀원이 병합한 작업):"
+    (Git-Out log "HEAD..origin/$mainBranch" --pretty=format:"    %h  %s  (%an)") -split "`n" | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
+    Write-Host ""
+    $c = Read-Host "지금 내 브랜치로 가져올까요? (Y/n)"
+    if ($c -eq 'n') {
+        Warn "건너뜁니다. 나중에 sync.bat 을 실행하면 됩니다."
+        return
+    }
+
+    if (Git-Run merge "origin/$mainBranch" --no-edit) {
+        Ok "가져오기 완료"
+        return
+    }
+
+    Fail "합치는 중 충돌이 났습니다."
+    Say  "  충돌 파일:"
+    (Git-Out diff --name-only --diff-filter=U) -split "`n" | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+    Say  ""
+    Say  "  * .cs 파일: 편집기에서 <<<<<<< 표시를 정리한 뒤  git add <파일>"
+    Say  "  * .unity / .prefab: 둘 중 하나를 통째로 고르는 게 안전합니다."
+    Say  "      내 것 유지   →  git checkout --ours   <파일>"
+    Say  "      팀원 것 사용 →  git checkout --theirs <파일>"
+    Say  "      그 다음       →  git add <파일>"
+    Say  "  * 전부 정리했으면  →  git commit"
+}
+
 function Pause-End {
     Write-Host ""
     Write-Host "─────────────────────────────────────────────" -ForegroundColor DarkGray
