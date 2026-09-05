@@ -52,14 +52,14 @@ if ($behind -eq '0') {
     Ok "이미 최신입니다. 받아올 내용이 없습니다."
 } else {
     Step "$mainBranch 의 새 커밋 $behind 개를 가져옵니다"
-    Git-Out log "$branch..origin/$mainBranch" --pretty=format:"  %h  %s  (%an)" -split "`n" | ForEach-Object { Write-Host $_ }
+    (Git-Out log "$branch..origin/$mainBranch" --pretty=format:"  %h  %s  (%an)") -split "`n" | ForEach-Object { Write-Host $_ }
     Write-Host ""
     if (Git-Run merge "origin/$mainBranch" --no-edit) {
         Ok "합치기 완료"
     } else {
         Fail "충돌이 났습니다."
         Say  "  충돌 파일:"
-        Git-Out diff --name-only --diff-filter=U -split "`n" | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+        (Git-Out diff --name-only --diff-filter=U) -split "`n" | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
         Say  ""
         Say  "  * .cs 파일: 편집기에서 <<<<<<< 표시를 정리한 뒤  git add <파일>"
         Say  "  * .unity / .prefab: 둘 중 하나를 통째로 고르는 게 안전합니다."
