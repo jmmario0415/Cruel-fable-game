@@ -14,7 +14,7 @@ $root = Enter-Repo
 Say "작업 폴더: $root"
 
 # ---------------------------------------------------------------
-Step "1/7  Git 확인"
+Step "1/8  Git 확인"
 Assert-Git
 
 if (Test-GitLfs) {
@@ -29,7 +29,7 @@ if (Test-GitLfs) {
 }
 
 # ---------------------------------------------------------------
-Step "2/7  내 정보"
+Step "2/8  내 정보"
 
 $cfg = Read-Config
 
@@ -57,7 +57,7 @@ $null = Git-Out config pull.rebase false
 Ok "Windows 용 Git 옵션 설정 (autocrlf / longpaths / merge pull)"
 
 # ---------------------------------------------------------------
-Step "3/7  저장소 초기화"
+Step "3/8  저장소 초기화"
 
 if (Test-Path (Join-Path $root '.git')) {
     Ok "이미 Git 저장소입니다"
@@ -67,7 +67,7 @@ if (Test-Path (Join-Path $root '.git')) {
 }
 
 # ---------------------------------------------------------------
-Step "4/7  GitHub 원격 연결"
+Step "4/8  GitHub 원격 연결"
 
 $remote = Git-Out remote get-url origin
 if ($LASTEXITCODE -ne 0 -or -not $remote.Trim()) {
@@ -84,7 +84,7 @@ if ($LASTEXITCODE -ne 0 -or -not $remote.Trim()) {
 }
 Ok "origin = $remote"
 
-Step "5/7  원격 상태 확인"
+Step "5/8  원격 상태 확인"
 if (-not (Git-Run fetch origin)) {
     Die "GitHub 에 접속하지 못했습니다.`n     - 주소가 맞는지`n     - GitHub 로그인(자격 증명)이 되어 있는지 확인해 주세요."
 }
@@ -97,7 +97,41 @@ if ($remoteEmpty) { Ok "원격 저장소가 비어 있습니다 (첫 커밋을 �
 else              { Ok "원격 기본 브랜치: $mainBranch" }
 
 # ---------------------------------------------------------------
-Step "6/7  첫 커밋 / 원격과 합치기"
+Step "6/8  PR 양식 준비"
+
+$prDir  = Join-Path $root '.github'
+$prFile = Join-Path $prDir 'pull_request_template.md'
+if (Test-Path $prFile) {
+    Ok "PR 템플릿 이미 있음"
+} else {
+    New-Item -ItemType Directory -Force -Path $prDir | Out-Null
+    $tpl = @'
+## 오늘 한 일
+
+-
+-
+
+## 확인해 주세요
+
+<!-- 리뷰어가 특히 봐줬으면 하는 부분. 없으면 지워도 됩니다. -->
+
+## 체크리스트
+
+- [ ] Unity 에서 실행해 봤고 콘솔에 에러가 없다
+- [ ] 새로 추가한 에셋의 .meta 파일이 같이 커밋됐다
+- [ ] Library/ 나 빌드 결과물이 섞여 들어가지 않았다
+- [ ] 씬(.unity)·프리팹을 건드렸다면 팀원에게 미리 알렸다
+
+## 남은 일 / 다음에 할 것
+
+-
+'@
+    Set-Content -Path $prFile -Value $tpl -Encoding UTF8
+    Ok "PR 템플릿 생성 (.github\pull_request_template.md)"
+}
+
+# ---------------------------------------------------------------
+Step "7/8  첫 커밋 / 원격과 합치기"
 
 $null = Git-Out checkout -B $mainBranch
 
@@ -115,14 +149,32 @@ if (-not $remoteEmpty) {
     Say "  원격 내용을 가져와 합칩니다..."
     $merged = Git-Run pull origin $mainBranch --allow-unrelated-histories --no-rebase --no-edit
     if (-not $merged) {
-        Write-Host ""
-        Fail "원격과 합치는 중 충돌이 났습니다."
-        Say  "  아래처럼 처리해 주세요:"
-        Say  "    1) 충돌 난 파일을 열어 <<<<<<< 표시를 정리"
-        Say  "    2) git add .  →  git commit"
-        Say  "    3) 이 스크립트를 다시 실행"
-        Pause-End
-        exit 1
+        $conflicts = @()
+        foreach ($f in ((Git-Out diff --name-only --diff-filter=U) -split "`n")) {
+            $f = $f.Trim(); if ($f) { $conflicts += $f }
+        }
+
+        # .gitignore / .gitattributes 는 양쪽을 합쳐서 자동으로 해결한다
+        $autoFix = @('.gitignore', '.gitattributes')
+        foreach ($f in ($conflicts | Where-Object { $autoFix -contains $_ })) {
+            Resolve-UnionConflict $f
+            Ok "$f - 양쪽 내용을 합쳐서 자동 해결"
+        }
+
+        $rest = $conflicts | Where-Object { $autoFix -notcontains $_ }
+        if ($rest) {
+            Write-Host ""
+            Fail "직접 정리해야 하는 충돌이 남았습니다:"
+            $rest | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+            Say  ""
+            Say  "  1) 위 파일을 열어 <<<<<<< ======= >>>>>>> 표시를 지우고 내용을 정리"
+            Say  "  2) git add .  →  git commit"
+            Say  "  3) 이 스크립트를 다시 실행"
+            Pause-End
+            exit 1
+        }
+
+        if (-not (Git-Run commit --no-edit)) { Die "합치기 커밋 실패" }
     }
     Ok "합치기 완료"
 }
@@ -133,7 +185,7 @@ if (-not (Git-Run push -u origin $mainBranch)) {
 Ok "$mainBranch 브랜치 업로드 완료"
 
 # ---------------------------------------------------------------
-Step "7/7  LFS 상태"
+Step "8/8  LFS 상태"
 if (Test-GitLfs) {
     $tracked = Git-Out lfs track
     Say "  .gitattributes 기준 추적 규칙:"

@@ -28,6 +28,27 @@ if ($branch -eq $mainBranch) {
 }
 
 # ---------------------------------------------------------------
+Step "무시돼야 할 폴더가 추적되고 있는지 점검"
+$junkDirs = @('Library','Temp','Logs','UserSettings','obj','Build','Builds')
+$junk = @()
+$junkQuery = @('-c', 'core.quotepath=false', 'ls-files', '--') + $junkDirs
+foreach ($f in ((Git-Out @junkQuery) -split "`n")) {
+    $f = $f.Trim(); if ($f) { $junk += $f }
+}
+if ($junk) {
+    Warn "Unity 가 자동 생성하는 폴더가 Git 에 추적되고 있습니다 ($($junk.Count) 개):"
+    $junk | Select-Object -First 5 | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }
+    Warn ".gitignore 가 제대로 적용되지 않은 상태입니다."
+    $c = Read-Host "지금 추적에서 빼고 계속할까요? (Y/n)"
+    if ($c -ne 'n') {
+        foreach ($d in $junkDirs) { $null = Git-Out rm -r --cached --ignore-unmatch -q -- $d }
+        Ok "추적 해제 완료 (폴더와 파일은 그대로 남아 있습니다)"
+    }
+} else {
+    Ok "깨끗합니다"
+}
+
+# ---------------------------------------------------------------
 Step "변경사항 확인"
 $dirty = Git-Out status --porcelain
 
@@ -35,23 +56,40 @@ if ($dirty) {
     ($dirty -split "`n") | ForEach-Object { Write-Host "    $_" }
     Write-Host ""
 
-    # 큰 파일 경고 (LFS 미추적 100MB 이상)
-    $big = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
-           Where-Object { $_.Length -gt 100MB -and $_.FullName -notmatch '\\\.git\\' }
-    if ($big) {
-        Warn "100MB 가 넘는 파일이 있습니다. GitHub 는 100MB 초과 파일을 거부합니다:"
-        $big | Select-Object -First 5 | ForEach-Object {
-            Write-Host ("    {0}  ({1:N0} MB)" -f $_.FullName.Replace($root, '.'), ($_.Length / 1MB)) -ForegroundColor Yellow
-        }
-        Warn ".gitattributes 의 LFS 규칙에 확장자를 추가하거나 .gitignore 에 넣어 주세요."
-    }
-
     $msg = Read-Host "커밋 메시지 (엔터 = 자동)"
     if (-not $msg.Trim()) { $msg = "작업 진행 $(Get-Date -Format 'yyyy-MM-dd')" }
 
-    if (-not (Git-Run add -A))          { Die "git add 실패" }
-    if (-not (Git-Run commit -m $msg))  { Die "커밋 실패" }
-    Ok "커밋 완료: $msg"
+    if (-not (Git-Run add -A)) { Die "git add 실패" }
+
+    # ---- 올라갈 파일만 점검한다 (Library/ 같은 무시된 폴더는 아예 보지 않음) ----
+    $staged = @()
+    foreach ($rel in ((Git-Out -c core.quotepath=false diff --cached --name-only) -split "`n")) {
+        $rel = $rel.Trim()
+        if ($rel) { $staged += $rel }
+    }
+
+    # 100MB 넘는 파일 (LFS 로 올라가는 건 괜찮다)
+    $big = @()
+    foreach ($rel in $staged) {
+        $p = Join-Path $root ($rel -replace '/', '\')
+        if (Test-Path -LiteralPath $p) {
+            $len = (Get-Item -LiteralPath $p).Length
+            if ($len -gt 95MB) {
+                $attr = Git-Out check-attr filter -- $rel
+                if ($attr -notmatch 'filter:\s*lfs') { $big += [pscustomobject]@{ Path = $rel; MB = [math]::Round($len / 1MB) } }
+            }
+        }
+    }
+    if ($big) {
+        Warn "GitHub 가 거부할 큰 파일이 커밋에 들어 있습니다 (100MB 초과, LFS 미적용):"
+        $big | Select-Object -First 5 | ForEach-Object { Write-Host ("    {0}  ({1} MB)" -f $_.Path, $_.MB) -ForegroundColor Yellow }
+        Warn ".gitattributes 에 해당 확장자의 LFS 규칙을 추가하거나 .gitignore 에 넣어 주세요."
+        $c = Read-Host "그래도 커밋할까요? (y/N)"
+        if ($c -ne 'y') { Say "중단했습니다. 파일 정리 후 다시 실행해 주세요."; Pause-End; exit 0 }
+    }
+
+    if (-not (Git-Run commit -m $msg)) { Die "커밋 실패" }
+    Ok "커밋 완료: $msg  (파일 $($staged.Count) 개)"
 } else {
     Ok "새 변경사항 없음"
 }

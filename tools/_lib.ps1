@@ -23,22 +23,35 @@ function Die ([string]$m) {
 # git 은 경고를 stderr 로 뱉기 때문에 $ErrorActionPreference='Stop' 과 궁합이 나쁘다.
 # 아래 두 함수로만 git 을 호출한다.
 
+function Expand-Args ([object[]]$a) {
+    # PowerShell 은 배열 인자를 한 덩어리 문자열로 눌러버린다. 여기서 다시 펼친다.
+    $flat = @()
+    foreach ($x in $a) {
+        if ($null -eq $x) { continue }
+        if ($x -is [System.Array]) { foreach ($y in $x) { $flat += [string]$y } }
+        else { $flat += [string]$x }
+    }
+    return ,$flat
+}
+
 function Git-Out {
     # 출력만 받아오고 실패해도 예외를 던지지 않음
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
+    param([Parameter(ValueFromRemainingArguments = $true)][object[]]$GitArgs)
+    $a = @(Expand-Args $GitArgs)
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $out = & git @GitArgs 2>&1 | Out-String
+    $out = & git @a 2>&1 | Out-String
     $ErrorActionPreference = $old
     return $out.Trim()
 }
 
 function Git-Run {
     # 화면에 그대로 보여주며 실행. 실패하면 $false 반환
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
+    param([Parameter(ValueFromRemainingArguments = $true)][object[]]$GitArgs)
+    $a = @(Expand-Args $GitArgs)
     $old = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    & git @GitArgs 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    & git @a 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
     $code = $LASTEXITCODE
     $ErrorActionPreference = $old
     return ($code -eq 0)
@@ -46,8 +59,9 @@ function Git-Run {
 
 function Git-Ok {
     # 조용히 실행하고 성공 여부만 반환
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GitArgs)
-    $null = Git-Out @GitArgs
+    param([Parameter(ValueFromRemainingArguments = $true)][object[]]$GitArgs)
+    $a = @(Expand-Args $GitArgs)
+    $null = Git-Out @a
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -139,6 +153,29 @@ function Get-MainBranch {
     if (Git-Ok show-ref --verify --quiet refs/remotes/origin/main)   { return 'main' }
     if (Git-Ok show-ref --verify --quiet refs/remotes/origin/master) { return 'master' }
     return 'main'
+}
+
+# ---------- 충돌 자동 해결 (설정 파일 전용) ----------
+function Resolve-UnionConflict ([string]$rel) {
+    # .gitignore / .gitattributes 처럼 "줄 목록" 인 파일은
+    # 양쪽 내용을 합치고 중복만 걷어내면 안전하게 해결된다.
+    $ours   = (Git-Out show ":2:$rel") -split "`n"
+    $theirs = (Git-Out show ":3:$rel") -split "`n"
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    $out  = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($side in @($ours, $theirs)) {
+        foreach ($line in $side) {
+            $t = $line.TrimEnd()
+            if ($t -eq '' -or $t.StartsWith('#')) { $out.Add($t); continue }
+            if ($seen.Add($t)) { $out.Add($t) }
+        }
+    }
+
+    $full = Join-Path (Get-RepoRoot) $rel
+    $enc  = New-Object System.Text.UTF8Encoding($false)   # BOM 없이 저장해야 첫 줄이 깨지지 않는다
+    [IO.File]::WriteAllText($full, (($out -join "`n").TrimEnd() + "`n"), $enc)
+    $null = Git-Out add -- $rel
 }
 
 function Pause-End {
