@@ -41,6 +41,9 @@ public class csPlayerMove : MonoBehaviour
         //이동
         moveDirection = 0f;
 
+        var keyboard = Keyboard.current;
+        if (keyboard == null) return; //키보드가 없으면 입력 처리 생략
+
         if (Keyboard.current.aKey.isPressed || Keyboard.current.leftArrowKey.isPressed)
         {
             moveDirection = -1f;
